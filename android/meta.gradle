@@ -1,0 +1,19 @@
+ext {
+    PROJECT_ID = "com.example.flutter_boilerplate_app"
+
+    VERSION_CODE = 1
+
+    if (project.hasProperty('versionCode') && versionCode != "") {
+        VERSION_CODE = versionCode.toInteger()
+    }
+
+    VERSION_NAME = "1.0.0"
+
+    if (project.hasProperty('versionName') && versionName != "") {
+        VERSION_NAME = versionName.toString()
+    }
+
+    MIN_SDK_VERSION = 21
+    TARGET_SDK_VERSION = 33
+    COMPILE_SDK_VERSION = 33
+}

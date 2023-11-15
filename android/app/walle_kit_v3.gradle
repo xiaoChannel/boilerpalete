@@ -1,0 +1,303 @@
+//
+//使用方法
+//
+//apply from: 'walle.gradle'
+//
+//android {
+//    productFlavors {
+//        prod {...}
+//    }
+//
+//    walleConfigs {
+//        prod {
+//            enabled = true
+//
+//            outputDir = file("${project.buildDir}/outputs/apk/${flavorName}/${buildType}/walle") // 默认：file("${project.buildDir}/outputs/apk/${flavorName}/${buildType}/walle")
+//            fileNameFormat = '${appName}-${buildType}-${channelId}.apk' // 默认：'${appName}-${buildType}-${channelId}.apk'
+////            channelType = 0 // 0：默认；1：json
+//            channelFile = file('channel')
+//        }
+//    }
+//}
+//
+//walle {
+//    enabled = false
+//}
+//
+import org.apache.commons.exec.CommandLine
+import org.apache.commons.exec.DefaultExecutor
+import org.apache.commons.exec.ExecuteException
+import org.apache.commons.exec.ExecuteResultHandler
+import org.apache.commons.exec.ExecuteWatchdog
+import org.apache.commons.exec.Executor
+import org.apache.commons.exec.PumpStreamHandler
+import org.apache.commons.exec.DefaultExecuteResultHandler
+
+buildscript {
+    repositories {
+        google()
+        mavenCentral()
+
+        // 阿里云jcenter镜像
+        maven { url 'https://maven.aliyun.com/repository/jcenter' }
+    }
+    dependencies {
+        classpath 'com.android.tools.build:gradle:7.1.2'
+        classpath 'com.meituan.android.walle:payload_writer:1.1.7'
+        classpath 'org.apache.commons:commons-exec:1.3'
+    }
+}
+
+android {
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_1_8
+        targetCompatibility JavaVersion.VERSION_1_8
+    }
+}
+
+class Walle {
+    final String name
+    Boolean walleEnabled
+    File outputDir
+    String fileNameFormat
+    Integer channelType
+    File channelFile
+
+    Walle(String name = 'default') {
+        this.name = name
+    }
+
+    void validate() {
+        if (walleEnabled == null || !walleEnabled.booleanValue()) {
+            return
+        }
+        if (channelType != null && channelType != 0 && channelType != 1) {
+            throw new RuntimeException("walle channel type is unsupported for variant '$name'")
+        }
+        if (channelFile == null) {
+            throw new RuntimeException("walle channel file is null for variant '$name'")
+        }
+    }
+
+    Walle mergeWith(Walle other) {
+        if (other == null) {
+            return this
+        }
+        def mergeWalle = new Walle(name == 'default' ? other.name : (other.name == 'default' ? name : "$name${other.name.capitalize()}"))
+        mergeWalle.walleEnabled = other.walleEnabled != null ? other.walleEnabled : walleEnabled
+        println("other.name     ====="  +other.name)
+        println("walleEnabled     ====="  +mergeWalle.walleEnabled )
+
+        mergeWalle.outputDir = other.outputDir ?: outputDir
+        mergeWalle.fileNameFormat = other.fileNameFormat ?: fileNameFormat
+        mergeWalle.channelType = other.channelType ?: channelType
+
+        mergeWalle.channelFile = other.channelFile ?: channelFile
+        return mergeWalle
+    }
+}
+
+apply plugin: WallePlugin
+
+class WallePlugin implements Plugin<Project> {
+
+    @Override
+    void apply(Project target) {
+        target.extensions.create('walle', Walle.class)
+        target.plugins.withId('com.android.application') {
+            def baseWalle = target.walle
+            def walleConfigs = target.container(Walle.class)
+            target.android.extensions.walleConfigs = walleConfigs
+            target.android.applicationVariants.whenObjectAdded { variant ->
+                def mergeWalle = null
+                List<Walle> flavorWalles = variant.productFlavors?.stream()?.map { flavor -> walleConfigs.findByName(flavor.name) }?.collect()?.toList() ?: Collections.emptyList()
+                def buildTypeWalle = walleConfigs.findByName(variant.buildType.name)
+                if (buildTypeWalle == null && (variant.buildType.name == 'debug' || variant.buildType.name == 'profile')) {
+                    buildTypeWalle = new Walle(variant.buildType.name)
+                    buildTypeWalle.walleEnabled = false
+                    //println(" buildTypeWalle.walleEnabled  ==..: " + buildTypeWalle.walleEnabled)
+
+                }
+
+//                println(" buildTypeWalle.walleEnabled ..: " + buildTypeWalle.walleEnabled)
+
+                // buildType > flavor > base
+                List<Walle> walles = []
+                walles.add(baseWalle)
+                walles.addAll(flavorWalles)
+                walles.add(buildTypeWalle)
+                for (def walle in walles) {
+                    if (mergeWalle == null) {
+                        mergeWalle = walle
+                    } else {
+                        mergeWalle = mergeWalle.mergeWith(walle)
+                    }
+                }
+                mergeWalle?.validate()
+
+                variant.assemble.doLast {
+                    println(" mergeWalle.walleEnabled ..: " + mergeWalle.walleEnabled)
+
+                    walleWork(target, variant, mergeWalle)
+                }
+            }
+        }
+
+        target.afterEvaluate {
+            if (!target.plugins.hasPlugin('com.android.application')) {
+                target.logger.warn("The Android Gradle Plugin was not applied. Gradle Walle will not be configured.")
+            }
+        }
+    }
+
+    void walleWork(Project target, def variant, Walle walle) {
+        if (walle == null || walle.walleEnabled == null || !walle.walleEnabled.booleanValue()) {
+            target.logger.info("Gradle Walle is disabled for variant '${variant.name}'.")
+            return
+        }
+
+        if (!variant.signingReady && !variant.outputsAreSigned) {
+            target.logger.error("Signing not ready for Gradle Walle. Be sure to specify a signingConfig for variant '${variant.name}'.")
+            return
+        }
+
+        println ( '--- walle --- '+ walle.walleEnabled.booleanValue())
+
+        def apkFile = variant.outputs.first().outputFile as File
+        println "apk file: ${apkFile.path}"
+
+        def v2SigningEnabled = v2SigningEnabled(variant)
+        println "v2SigningEnabled: ${v2SigningEnabled}"
+        if (!v2SigningEnabled) {
+            throw new RuntimeException("${apkFile.path} has no v2 signature in Apk Signing Block!")
+        }
+
+        // 预备输出目录
+        def outputDir = walle.outputDir
+        if (outputDir == null) {
+            outputDir = new File(apkFile.parentFile, 'walle')
+        }
+        def channelsDir = new File(outputDir, 'channels')
+        if (!channelsDir.exists()) {
+            channelsDir.mkdirs()
+        }
+
+        def nameVariantMap = [
+                'appName'    : target.name,
+                'projectName': target.rootProject.name,
+                'buildType'  : variant.buildType.name,
+                'versionName': variant.versionName,
+                'versionCode': variant.versionCode,
+                'packageName': variant.applicationId,
+                'flavorName' : variant.flavorName,
+                'channelId'  : 'channel'
+        ]
+
+        def fileNameFormat = walle.fileNameFormat ?: '${appName}-${buildType}-${channelId}.apk'
+        def targetApkFile = new File(outputDir, new groovy.text.SimpleTemplateEngine().createTemplate(fileNameFormat).make(nameVariantMap).toString())
+// new File(outputDir, apkFile.name)
+
+        // 复制
+        java.nio.file.Files.copy(apkFile.toPath(), targetApkFile.toPath(), java.nio.file.StandardCopyOption.REPLACE_EXISTING)
+
+        println "target apk file: ${targetApkFile.path}"
+
+        // 读取渠道信息
+        def channels = []
+        if (walle.channelType == 1) {
+            def slurper = new groovy.json.JsonSlurper()
+            channels = slurper.parse(walle.channelFile)
+        } else {
+            walle.channelFile.eachLine { line ->
+                def lineTrim = line.trim()
+                if (lineTrim.length() != 0 && !lineTrim.startsWith("#")) {
+                    def channelId = line.split("#").first().trim()
+                    if (channelId.length() != 0) {
+                        channels.add(['alias': channelId, 'channelId': channelId])
+                    }
+                }
+            }
+        }
+        channels.each { channel ->
+            nameVariantMap['channelId'] = channel.channelId
+            def storeDir = channelsDir
+            if (channel.storeDir != null) {
+                storeDir = new File(storeDir, channel.storeDir)
+                if (!storeDir.exists()) {
+                    storeDir.mkdirs()
+                }
+            }
+            def channelApkFile = new File(storeDir, new groovy.text.SimpleTemplateEngine().createTemplate(fileNameFormat).make(nameVariantMap).toString())
+
+            def originalApkFile = targetApkFile
+
+            if (originalApkFile != targetApkFile) {
+                println "${channel.alias ?: channel.channelId} original apk file: ${originalApkFile.path}"
+            }
+            println "${channel.alias ?: channel.channelId} channel apk file: ${channelApkFile.path}"
+
+            writePayload(target, channel, originalApkFile, channelApkFile)
+
+        }
+
+        channels.each { channel ->
+            def storeDir = channelsDir
+            nameVariantMap['channelId'] = channel.channelId
+            def channelApkFile = new File(storeDir, new groovy.text.SimpleTemplateEngine().createTemplate(fileNameFormat).make(nameVariantMap).toString())
+            println(" Channel: " + channel.channelId + ' APK Path：' + channelApkFile.absolutePath)
+            if (!channelApkFile.exists()) {
+                println(" channelApkFile: " + channelApkFile.absolutePath)
+
+            }
+
+            // 创建命令行对象
+            def commandLine = CommandLine.parse("curl")
+            commandLine.addArgument("-F")
+            commandLine.addArgument("file=@${channelApkFile.absolutePath}")
+            commandLine.addArgument("-F")
+            commandLine.addArgument("buildUpdateDescription=${channel.channelId}")
+            commandLine.addArgument("-F")
+            commandLine.addArgument("_api_key=79fdd1bffed67da4ade389c32f866eba")
+            commandLine.addArgument("-k")
+            commandLine.addArgument("https://www.pgyer.com/apiv2/app/upload")
+
+            // 创建执行器对象
+            def executor = new DefaultExecutor()
+
+            // 配置执行器
+            executor.setStreamHandler(new PumpStreamHandler(System.out, System.err)) // 设置输入输出流处理器
+
+            // 创建结果处理器
+            // def resultHandler = new DefaultExecuteResultHandler()
+
+            try {
+                //executor.execute(commandLine, resultHandler)
+//
+//                // 等待命令执行完成
+//                resultHandler.waitFor()
+//
+//                // 打印命令执行结果
+//                def exitValue = resultHandler.getExitValue()
+//                println "Exit Value: $exitValue"
+
+            } catch (ExecuteException e) {
+                // 处理命令执行异常
+                e.printStackTrace()
+            }
+
+        }
+
+        println '--- walle end---'
+    }
+
+
+    boolean v2SigningEnabled(variant) {
+        def signingConfig = variant.signingConfig
+        return signingConfig.v2SigningEnabled
+    }
+
+    void writePayload(Project target, def channel, File apkFile, File channelApkFile) {
+        java.nio.file.Files.copy(apkFile.toPath(), channelApkFile.toPath(), java.nio.file.StandardCopyOption.REPLACE_EXISTING)
+        com.meituan.android.walle.ChannelWriter.put(channelApkFile, channel.channelId, channel.extraInfo)
+    }
+}

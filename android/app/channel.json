@@ -1,0 +1,13 @@
+[
+  {
+    "alias": "小米",
+    "channelId": "xiaomi",
+    "extraInfo": {
+      "secretKey": "12345678"
+    }
+  },
+  {
+    "alias": "腾讯",
+    "channelId": "tencent"
+  }
+]

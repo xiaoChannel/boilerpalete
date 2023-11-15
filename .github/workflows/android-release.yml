@@ -1,0 +1,99 @@
+name: release_android
+
+on:
+  pull_request:
+    branches: [ master ]
+  push:
+    branches: [ master ]
+  workflow_dispatch:
+    inputs:
+      environment:
+        type: choice
+        options:
+          - dev
+          - staging
+        required: true
+        default: 'staging'
+      multipleChannels:
+        type: choice
+        description: 'Open multi-channel package'
+        options:
+          - false
+          - true
+        required: true
+        default: false
+jobs:
+  build_android:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout the code
+        uses: actions/checkout@v3
+      - name: Setup Java to compile Android project
+        uses: actions/setup-java@v3
+        with:
+          distribution: 'temurin'
+          java-version: "17"
+      - name: Install and set Flutter version
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: "3.7.12"
+      - name: Restore packages
+        run: flutter pub get
+
+      #      - run: echo $ENCODED_KEYSTORE | base64 -di > android/app/key.jks
+      #        env:
+      #          ENCODED_KEYSTORE: ${{ secrets.ENCODED_KEYSTORE }}
+
+      - if: github.event.inputs.environment == 'dev'
+        name: Build Android App Bundle - dev
+        run: flutter build apk -t lib/main_dev.dart --flavor dev --release
+        env:
+          PGYER_URL : 'https://www.pgyer.com/XNfCBC'
+          MULTIPLE_CHANNELS: ${{github.event.inputs.multipleChannels}}
+      #          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+      #          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+      #          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD}}
+
+      - if: github.event.inputs.environment == 'staging'
+        name: Build Android App Bundle - staging
+        run: flutter build apk -t lib/main_staging.dart --flavor staging --release
+        env:
+          MULTIPLE_CHANNELS: ${{github.event.inputs.multipleChannels}}
+          PGYER_URL : 'https://www.pgyer.com/D1B1Ra'
+      #         KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+      #         KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+      #         KEY_PASSWORD: ${{ secrets.KEY_PASSWORD}}
+
+      - if: ${{ github.event.inputs.multipleChannels == 'false' }}
+        name: Upload PGYER File
+        id: pgyer
+        uses: xtayga/upload-pgyer-action@master
+        with:
+          url: https://www.pgyer.com/apiv2/app/upload
+          forms: '{"_api_key":"79fdd1bffed67da4ade389c32f866eba","buildName":"Android"}'
+          fileForms: '{"file":"build/app/outputs/apk/${{ github.event.inputs.environment }}/release/app-${{ github.event.inputs.environment }}-release.apk"}'
+
+      - if: failure()
+        name: Send Slack Alert - Failure
+        uses: rtCamp/action-slack-notify@master
+        env:
+          SLACK_MESSAGE: 'An error occurred: ${{ job.status }}'
+          SLACK_COLOR: '#FF3300'
+          SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK_FOR_FLUTTER_URL }}
+          SLACK_TITLE: 'flutter android  ${{github.event.inputs.environment}}'
+          SLACK_USERNAME: ${{github.event.inputs.environment}}
+          MSG_MINIMAL: true
+          SLACK_ICON: "[https://zhengxin-pub.bj.bcebos.com/financepic/370888f8594a61a4369f0731265333f1_fullsize.jpg]"
+
+      - if: success() && ${{ github.event.inputs.multipleChannels == 'false'}}
+        name: Send Slack Alert - Success
+        uses: rtCamp/action-slack-notify@master
+        env:
+          SLACK_MESSAGE: 'Running result:${{ job.status }}   pgyer： ${ PGYER_URL}'
+          SLACK_COLOR: '#00FF00'
+          SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK_FOR_FLUTTER_URL }}
+          SLACK_TITLE: 'flutter android  ${{github.event.inputs.environment}}'
+          SLACK_USERNAME: ${{github.event.inputs.environment}}
+          SLACK_ICON: "[https://zhengxin-pub.bj.bcebos.com/financepic/370888f8594a61a4369f0731265333f1_fullsize.jpg]"
+

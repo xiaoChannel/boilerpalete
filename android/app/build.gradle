@@ -1,0 +1,152 @@
+def localProperties = new Properties()
+def localPropertiesFile = rootProject.file('local.properties')
+if (localPropertiesFile.exists()) {
+    localPropertiesFile.withReader('UTF-8') { reader ->
+        localProperties.load(reader)
+    }
+}
+
+def keystoreProperties = new Properties()
+def keystorePropertiesFile = rootProject.file('key.properties')
+if (keystorePropertiesFile.exists()) {
+    keystoreProperties.load(new FileInputStream(keystorePropertiesFile))
+}
+
+def flutterRoot = localProperties.getProperty('flutter.sdk')
+if (flutterRoot == null) {
+    throw new GradleException("Flutter SDK not found. Define location with flutter.sdk in the local.properties file.")
+}
+
+def flutterVersionCode = localProperties.getProperty('flutter.versionCode')
+if (flutterVersionCode == null) {
+    flutterVersionCode = '1'
+}
+
+def flutterVersionName = localProperties.getProperty('flutter.versionName')
+if (flutterVersionName == null) {
+    flutterVersionName = '1.0'
+}
+apply plugin: 'com.android.application'
+apply plugin: 'kotlin-android'
+apply from: "$flutterRoot/packages/flutter_tools/gradle/flutter.gradle"
+apply from: "./walle_kit_v3.gradle"
+
+android {
+    compileSdkVersion COMPILE_SDK_VERSION
+    ndkVersion flutter.ndkVersion
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_1_8
+        targetCompatibility JavaVersion.VERSION_1_8
+    }
+
+    kotlinOptions {
+        jvmTarget = '1.8'
+    }
+
+    sourceSets {
+        main.java.srcDirs += 'src/main/kotlin'
+    }
+
+    defaultConfig {
+        // TODO: Specify your own unique Application ID (https://developer.android.com/studio/build/application-id.html).
+        applicationId PROJECT_ID
+        // You can update the following values to match your application needs.
+        // For more information, see: https://docs.flutter.dev/deployment/android#reviewing-the-gradle-build-configuration.
+        minSdkVersion MIN_SDK_VERSION
+        targetSdkVersion TARGET_SDK_VERSION
+        versionCode flutterVersionCode.toInteger()
+        versionName flutterVersionName
+    }
+
+    signingConfigs {
+        release {
+            storeFile file("key.jks")
+            storePassword "123456"
+            keyAlias "my-key-alias"
+            keyPassword "123456"
+        }
+    }
+
+    buildTypes {
+        release {
+            signingConfig signingConfigs.release
+            minifyEnabled true
+        }
+    }
+
+    flavorDimensions "api"
+
+    productFlavors {
+        dev {
+            dimension "api"
+            applicationIdSuffix ".dev"
+            resValue "string", "app_name", "Runner dev"
+            manifestPlaceholders = [
+                GETUI_APPID    : "",
+                HUAWEI_APP_ID  : "",
+                XIAOMI_APP_ID  : "",
+                XIAOMI_APP_KEY : "",
+                OPPO_APP_KEY   : "",
+                OPPO_APP_SECRET: "",
+                VIVO_APP_ID    : "",
+                VIVO_APP_KEY   : "",
+                MEIZU_APP_ID   : "",
+                MEIZU_APP_KEY  : "",
+                AMAP_API_KEY   : "",
+            ]
+        }
+
+        staging {
+            dimension "api"
+            applicationIdSuffix ".staging"
+            resValue "string", "app_name", "Runner staging"
+            manifestPlaceholders = [
+                GETUI_APPID    : "",
+                HUAWEI_APP_ID  : "",
+                XIAOMI_APP_ID  : "",
+                XIAOMI_APP_KEY : "",
+                OPPO_APP_KEY   : "",
+                OPPO_APP_SECRET: "",
+                VIVO_APP_ID    : "",
+                VIVO_APP_KEY   : "",
+                MEIZU_APP_ID   : "",
+                MEIZU_APP_KEY  : "",
+                AMAP_API_KEY   : "",
+            ]
+        }
+    }
+
+    def  multiple_channels  = System.getenv('MULTIPLE_CHANNELS')
+    def  walleEnableds= false
+    if (multiple_channels == null ||multiple_channels == 'false'){
+        walleEnableds =false
+    }else {
+        walleEnableds = true
+    }
+
+    println 'pppppppp'+multiple_channels
+    println 'pppppppp walleEnableds '+ walleEnableds
+
+    walleConfigs {
+        release {
+            walleEnabled = walleEnableds
+            outputDir = file("${project.buildDir}/outputs/apk/channel") // 默认：file("${project.buildDir}/outputs/apk/${flavorName}/${buildType}/walle")
+            fileNameFormat = '${appName}-${buildType}-${channelId}.apk' // 默认：'${appName}-${buildType}-${channelId}.apk'
+//            channelType = 0 // 0：默认；1：json
+//            channelFile = file('channel')
+            channelType = 1
+            channelFile = file('channel.json')
+        }
+    }
+}
+
+flutter {
+    source '../..'
+}
+walle {
+    walleEnabled = false
+}
+dependencies {
+    implementation "org.jetbrains.kotlin:kotlin-stdlib-jdk7:$kotlin_version"
+}
